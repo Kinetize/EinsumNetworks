@@ -8,6 +8,7 @@ import gzip
 import subprocess
 import csv
 import scipy.io as sp
+from skimage.transform import resize
 
 
 def maybe_download(directory, url_base, filename):
@@ -44,16 +45,15 @@ def maybe_download_mnist():
                 shutil.copyfileobj(f_in, f_out)
 
 
-def load_mnist():
+def load_mnist(width=28, height=28, original_width=28, original_height=28):
     """Load MNIST"""
 
     maybe_download_mnist()
 
     data_dir = '../data/mnist'
-
     fd = open(os.path.join(data_dir, 'train-images-idx3-ubyte'))
     loaded = np.fromfile(file=fd, dtype=np.uint8)
-    train_x = loaded[16:].reshape((60000, 784)).astype(np.float32)
+    train_x = loaded[16:].reshape((60000, original_width, original_height)).astype(np.float32)
 
     fd = open(os.path.join(data_dir, 'train-labels-idx1-ubyte'))
     loaded = np.fromfile(file=fd, dtype=np.uint8)
@@ -61,7 +61,7 @@ def load_mnist():
 
     fd = open(os.path.join(data_dir, 't10k-images-idx3-ubyte'))
     loaded = np.fromfile(file=fd, dtype=np.uint8)
-    test_x = loaded[16:].reshape((10000, 784)).astype(np.float32)
+    test_x = loaded[16:].reshape((10000, original_width, original_height)).astype(np.float32)
 
     fd = open(os.path.join(data_dir, 't10k-labels-idx1-ubyte'))
     loaded = np.fromfile(file=fd, dtype=np.uint8)
@@ -69,6 +69,14 @@ def load_mnist():
 
     train_labels = np.asarray(train_labels)
     test_labels = np.asarray(test_labels)
+
+    # Resize if needed
+    if width != original_width or height != original_height:
+        train_x = resize(train_x, (60000, width, height))
+        test_x = resize(test_x, (10000, width, height))
+
+    train_x = train_x.reshape((60000, width * height))
+    test_x = test_x.reshape((10000, width * height))
 
     return train_x, train_labels, test_x, test_labels
 

@@ -20,31 +20,35 @@ print(demo_text)
 ############################################################################
 fashion_mnist = False
 
-exponential_family = EinsumNetwork.BinomialArray
+# exponential_family = EinsumNetwork.BinomialArray
 # exponential_family = EinsumNetwork.CategoricalArray
-# exponential_family = EinsumNetwork.NormalArray
+exponential_family = EinsumNetwork.NormalArray
 
 classes = [7]
 # classes = [2, 3, 5, 7]
 # classes = None
 
-K = 10
+K = 1
 
-structure = 'poon-domingos'
-# structure = 'binary-trees'
+width = 14
+height = 14
+fft_components = width // 2 + 1
+input_size = height * fft_components
+
+# structure = 'poon-domingos'
+structure = 'binary-trees'
 
 # 'poon-domingos'
 pd_num_pieces = [4]
 # pd_num_pieces = [7]
 # pd_num_pieces = [7, 28]
-width = 28
-height = 28
 
 # 'binary-trees'
-depth = 3
-num_repetitions = 20
+depth = 4
+num_repetitions = 7
+split_vars_on_repetition = False
 
-num_epochs = 5
+num_epochs = 10
 batch_size = 100
 online_em_frequency = 1
 online_em_stepsize = 0.05
@@ -60,9 +64,19 @@ if exponential_family == EinsumNetwork.NormalArray:
 
 # get data
 if fashion_mnist:
-    train_x, train_labels, test_x, test_labels = datasets.load_fashion_mnist()
+    train_x_raw, train_labels, test_x_raw, test_labels = datasets.load_fashion_mnist(width, height)
 else:
-    train_x, train_labels, test_x, test_labels = datasets.load_mnist()
+    train_x_raw, train_labels, test_x_raw, test_labels = datasets.load_mnist(width, height)
+
+# TODO: Rework this section
+train_x = torch.fft.rfft(torch.tensor(train_x_raw.reshape((-1, width, height))))
+test_x = torch.fft.rfft(torch.tensor(test_x_raw.reshape((-1, width, height))))
+
+train_x = train_x.reshape((-1, train_x.shape[1] * train_x.shape[2]))
+test_x = test_x.reshape((-1, test_x.shape[1] * test_x.shape[2]))
+
+train_x = torch.stack([train_x.real, train_x.imag], dim=-1)
+test_x = torch.stack([test_x.real, test_x.imag], dim=-1)
 
 if not exponential_family != EinsumNetwork.NormalArray:
     train_x /= 255.
@@ -81,10 +95,12 @@ if classes is not None:
     train_x = train_x[np.any(np.stack([train_labels == c for c in classes], 1), 1), :]
     valid_x = valid_x[np.any(np.stack([valid_labels == c for c in classes], 1), 1), :]
     test_x = test_x[np.any(np.stack([test_labels == c for c in classes], 1), 1), :]
+    test_x_raw = test_x_raw[np.any(np.stack([test_labels == c for c in classes], 1), 1), :]
 
-train_x = torch.from_numpy(train_x).to(torch.device(device))
-valid_x = torch.from_numpy(valid_x).to(torch.device(device))
-test_x = torch.from_numpy(test_x).to(torch.device(device))
+train_x = train_x.to(torch.device(device))
+valid_x = valid_x.to(torch.device(device))
+test_x = test_x.to(torch.device(device))
+
 
 # Make EinsumNetwork
 ######################################
@@ -92,13 +108,14 @@ if structure == 'poon-domingos':
     pd_delta = [[height / d, width / d] for d in pd_num_pieces]
     graph = Graph.poon_domingos_structure(shape=(height, width), delta=pd_delta)
 elif structure == 'binary-trees':
-    graph = Graph.random_binary_trees(num_var=train_x.shape[1], depth=depth, num_repetitions=num_repetitions)
+    graph = Graph.random_binary_trees(num_var=input_size, depth=depth, num_repetitions=num_repetitions,
+                                      split_vars_on_repetition=split_vars_on_repetition)
 else:
     raise AssertionError("Unknown Structure")
 
 args = EinsumNetwork.Args(
-        num_var=train_x.shape[1],
-        num_dims=1,
+        num_var=input_size,
+        num_dims=2,
         num_classes=1,
         num_sums=K,
         num_input_distributions=K,
@@ -162,8 +179,7 @@ utils.mkdir_p(samples_dir)
 # draw some samples #
 #####################
 
-samples = einet.sample(num_samples=25).cpu().numpy()
-samples = samples.reshape((-1, 28, 28))
+samples = einet.sample(num_samples=25).cpu()
 utils.save_image_stack(samples, 5, 5, os.path.join(samples_dir, "samples.png"), margin_gray_val=0.)
 
 # Draw conditional samples for reconstruction
@@ -182,12 +198,12 @@ for k in range(num_samples):
 samples /= num_samples
 samples = samples.squeeze()
 
-samples = samples.reshape((-1, 28, 28))
+samples = samples.reshape((-1, width, height))
 utils.save_image_stack(samples, 5, 5, os.path.join(samples_dir, "sample_reconstruction.png"), margin_gray_val=0.)
 
 # ground truth
-ground_truth = test_x[0:25, :].cpu().numpy()
-ground_truth = ground_truth.reshape((-1, 28, 28))
+ground_truth = test_x_raw[0:25, :]
+ground_truth = ground_truth.reshape((-1, width, height))
 utils.save_image_stack(ground_truth, 5, 5, os.path.join(samples_dir, "ground_truth.png"), margin_gray_val=0.)
 
 ###############################
@@ -195,7 +211,7 @@ utils.save_image_stack(ground_truth, 5, 5, os.path.join(samples_dir, "ground_tru
 ###############################
 
 mpe = einet.mpe().cpu().numpy()
-mpe = mpe.reshape((1, 28, 28))
+mpe = mpe.reshape((1, width, height))
 utils.save_image_stack(mpe, 1, 1, os.path.join(samples_dir, "mpe.png"), margin_gray_val=0.)
 
 # Draw conditional samples for reconstruction
@@ -206,7 +222,7 @@ einet.set_marginalization_idx(marginalize_idx)
 
 mpe_reconstruction = einet.mpe(x=test_x[0:25, :]).cpu().numpy()
 mpe_reconstruction = mpe_reconstruction.squeeze()
-mpe_reconstruction = mpe_reconstruction.reshape((-1, 28, 28))
+mpe_reconstruction = mpe_reconstruction.reshape((-1, width, height))
 utils.save_image_stack(mpe_reconstruction, 5, 5, os.path.join(samples_dir, "mpe_reconstruction.png"), margin_gray_val=0.)
 
 print()

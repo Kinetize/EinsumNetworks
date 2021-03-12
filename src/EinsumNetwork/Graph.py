@@ -3,6 +3,8 @@ import networkx as nx
 from itertools import count
 from networkx import read_gpickle, write_gpickle
 
+import math
+
 
 class EiNetAddress:
     """
@@ -240,7 +242,7 @@ def randomly_partition_on_node(graph, node, num_parts=2, proportions=None, rand_
     return partition_on_node(graph, node, child_indices)
 
 
-def random_binary_trees(num_var, depth, num_repetitions):
+def random_binary_trees(num_var, depth, num_repetitions, split_vars_on_repetition=False):
     """
     Generate a PC graph via several random binary trees -- RAT-SPNs.
 
@@ -259,12 +261,28 @@ def random_binary_trees(num_var, depth, num_repetitions):
     root = DistributionVector(range(num_var))
     graph.add_node(root)
 
+    # if split_vars_on_repetition:
+    #     # ceil() ensures all variables are captured
+    #     vars_per_repetition = math.ceil(num_var / num_repetitions)
+    #
+    #     root_nodes = [DistributionVector(root.scope[i * vars_per_repetition: (i + 1) * vars_per_repetition])
+    #                   for i in range(num_repetitions + 1)]
+
+    if split_vars_on_repetition:
+        # ceil() ensures all variables are captured
+        vars_per_repetition = math.ceil(num_var / num_repetitions)
+
     for repetition in range(num_repetitions):
-        cur_nodes = [root]
+        if split_vars_on_repetition:
+            cur_nodes = [DistributionVector(root.scope[repetition * vars_per_repetition:
+                                                       (repetition + 1) * vars_per_repetition])]
+        else:
+            cur_nodes = [root]
+
         for d in range(depth):
             child_nodes = []
             for node in cur_nodes:
-                _, cur_child_nodes = randomly_partition_on_node(graph, node, 2)
+                _, cur_child_nodes = randomly_partition_on_node(graph, node, 2, proportions=[0.5, 0.5])
                 child_nodes += cur_child_nodes
             cur_nodes = child_nodes
         for node in cur_nodes:
@@ -596,9 +614,10 @@ if __name__ == '__main__':
 
     import matplotlib.pyplot as plt
 
-    graph = random_binary_trees(7, 2, 3)
+    graph = random_binary_trees(128, depth=7, num_repetitions=1, split_vars_on_repetition=False)
     _, msg = check_graph(graph)
     print(msg)
+    print(len(get_leaves(graph)))
 
     plt.figure(1)
     plt.clf()
@@ -608,11 +627,11 @@ if __name__ == '__main__':
 
     print()
 
-    graph = poon_domingos_structure((3, 3), delta=1, max_split_depth=None)
-    _, msg = check_graph(graph)
-    print(msg)
-    plt.figure(1)
-    plt.clf()
-    plt.title("Poon-Domingos Structure")
-    plot_graph(graph)
-    plt.show()
+    # graph = poon_domingos_structure((3, 3), delta=1, max_split_depth=None)
+    # _, msg = check_graph(graph)
+    # print(msg)
+    # plt.figure(1)
+    # plt.clf()
+    # plt.title("Poon-Domingos Structure")
+    # plot_graph(graph)
+    # plt.show()

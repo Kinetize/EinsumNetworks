@@ -2,6 +2,9 @@ from EinsumNetwork import Graph
 from EinsumNetwork.FactorizedLeafLayer import *
 from EinsumNetwork.SumLayer import *
 
+import torch
+
+
 class Args(object):
     """
     Arguments for EinsumNetwork class.
@@ -230,6 +233,14 @@ class EinsumNetwork(torch.nn.Module):
                     marg_idx = layer.get_marginalization_idx()
                     keep_idx = [i for i in range(self.args.num_var) if i not in marg_idx]
                     samples[:, keep_idx] = x[:, keep_idx]
+
+                # TODO: TEMP!
+                width = height = 14
+                fft_components = height // 2 + 1
+                samples = torch.complex(samples[..., 0], samples[..., 1]).reshape((-1, width, fft_components))
+                samples = torch.fft.irfft(samples)
+
+                samples = samples.reshape((-1, width, height))
 
                 return samples
 
