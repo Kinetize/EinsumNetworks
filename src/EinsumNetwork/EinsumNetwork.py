@@ -153,7 +153,7 @@ class EinsumNetwork(torch.nn.Module):
             einsum_layer()
         return self.einet_layers[-1].prob[:, :, 0]
 
-    def backtrack(self, num_samples=1, class_idx=0, x=None, mode='sampling', **kwargs):
+    def backtrack(self, num_samples=1, class_idx=0, x=None, mode='sampling', ifft=False, **kwargs):
         """
         Perform backtracking; for sampling or MPE approximation.
         """
@@ -234,13 +234,13 @@ class EinsumNetwork(torch.nn.Module):
                     keep_idx = [i for i in range(self.args.num_var) if i not in marg_idx]
                     samples[:, keep_idx] = x[:, keep_idx]
 
-                # TODO: TEMP!
-                width = height = 14
-                fft_components = height // 2 + 1
-                samples = torch.complex(samples[..., 0], samples[..., 1]).reshape((-1, width, fft_components))
-                samples = torch.fft.irfft(samples)
+                if ifft:
+                    width = height = 14
+                    fft_components = height // 2 + 1
+                    samples = torch.complex(samples[..., 0], samples[..., 1]).reshape((-1, width, fft_components))
+                    samples = torch.fft.irfft(samples, norm='ortho')
 
-                samples = samples.reshape((-1, width, height))
+                    samples = samples.reshape((-1, width, height))
 
                 return samples
 
