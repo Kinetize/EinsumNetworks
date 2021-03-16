@@ -40,11 +40,14 @@ pd_num_pieces = [4]
 width = 28
 height = 28
 
+use_pair = True
+num_var = 28 * (15 if use_pair else 30)
+
 # 'binary-trees'
 depth = 3
 num_repetitions = 20
 
-num_epochs = 20
+num_epochs = 10
 batch_size = 100
 online_em_frequency = 1
 online_em_stepsize = 0.05
@@ -93,13 +96,13 @@ if structure == 'poon-domingos':
     graph = Graph.poon_domingos_structure(shape=(height, width), delta=pd_delta)
 elif structure == 'binary-trees':
     #graph = Graph.random_binary_trees(num_var=train_x.shape[1], depth=depth, num_repetitions=num_repetitions)
-    graph = Graph.random_binary_trees(num_var=28*30, depth=depth, num_repetitions=num_repetitions)
+    graph = Graph.random_binary_trees(num_var=num_var, depth=depth, num_repetitions=num_repetitions)
 else:
     raise AssertionError("Unknown Structure")
 
 args = EinsumNetwork.Args(
-        num_var=28*30,#train_x.shape[1],
-        num_dims=1,
+        num_var=num_var,#train_x.shape[1],
+        num_dims=2 if use_pair else 1,
         num_classes=1,
         num_sums=K,
         num_input_distributions=K,
@@ -120,7 +123,13 @@ def fft2d(batch_data, norm="forward"):
     batch_data = batch_data.reshape(batch_data.shape[0], 28,28)
     batch_fft2d = torch.fft.rfft2(batch_data, norm=norm)
 
-    batch_fft = torch.cat((batch_fft2d.real, batch_fft2d.imag), 2).reshape(batch_data.shape[0], -1)
+    batch_fft = torch.cat((batch_fft2d.real, batch_fft2d.imag), 2)
+
+    if use_pair:
+        batch_fft = batch_fft.reshape(batch_data.shape[0], -1, 2)
+    else:
+        batch_fft = batch_fft.reshape(batch_data.shape[0], -1)
+
     """
     print(batch_fft.shape)
 
