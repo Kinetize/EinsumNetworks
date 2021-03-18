@@ -498,9 +498,13 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
     def expectation_to_natural(self, phi):
         var = phi[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
+
+        # Add noise to ensure matrix invertability
+        epsilon = 1e-6  # TODO: tune value
+        var += torch.diag(torch.tensor([epsilon] * self.num_dims)).to(var.device)
         var_inverse = var.inverse()
-        theta1 = torch.einsum('abcmn, abcnz->abcmz', var_inverse, phi[..., :self.num_dims].unsqueeze(dim=-1))\
-            .squeeze(dim=-1)  # TODO: recheck if correct
+
+        theta1 = (var_inverse @ phi[..., :self.num_dims].unsqueeze(dim=-1)).squeeze(dim=-1)
         theta2 = -var_inverse.reshape((*var_inverse.size()[:-2], self.num_dims ** 2)) / 2
         return torch.cat((theta1, theta2), -1)
 
