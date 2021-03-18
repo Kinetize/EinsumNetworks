@@ -57,3 +57,9 @@ def sample_matrix_categorical(p):
         rand = torch.rand((cp.shape[0], 1), device=cp.device)
         rand_idx = torch.sum(rand > cp, -1).long()
         return rand_idx
+
+
+# TODO: Tune epsilon!
+def stable_matrix_inverse(a, epsilon=1e-6):
+    # Add noise to ensure matrix invertability
+    return (a + torch.diag(torch.tensor([epsilon] * a.size()[-1])).to(a.device)).inverse()

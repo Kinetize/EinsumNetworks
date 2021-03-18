@@ -26,13 +26,14 @@ fashion_mnist = False
 exponential_family = EinsumNetwork.MultivariateNormalArray
 
 classes = [7]
+# classes = list(range(10))
 # classes = [2, 3, 5, 7]
 # classes = None
 
 K = 1
 
-width = 14
-height = 14
+width = 28
+height = 28
 fft_components = width // 2 + 1
 input_size = height * fft_components
 
@@ -61,6 +62,8 @@ if exponential_family == EinsumNetwork.BinomialArray:
 if exponential_family == EinsumNetwork.CategoricalArray:
     exponential_family_args = {'K': 256}
 if exponential_family == EinsumNetwork.NormalArray:
+    exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
+if exponential_family == EinsumNetwork.MultivariateNormalArray:
     exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
 
 # get data

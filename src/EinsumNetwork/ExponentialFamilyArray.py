@@ -1,5 +1,5 @@
 import torch
-from utils import one_hot
+from utils import one_hot, stable_matrix_inverse
 
 
 class ExponentialFamilyArray(torch.nn.Module):
@@ -468,13 +468,14 @@ class MultivariateNormalArray(ExponentialFamilyArray):
             phi[..., :self.num_dims] = torch.randn(self.num_var, *self.array_shape, self.num_dims)  # Init mean
 
             # Init diagonal of covariance matrix as identity  # TODO: Change that probably!
-            phi[..., self.num_dims:] = torch.eye(self.num_dims).flatten()
+            cov_ = torch.randn(self.num_dims, self.num_dims)
+            phi[..., self.num_dims:] = (cov_ @ cov_.t()).flatten()
 
         return phi
 
     def project_params(self, phi):
         phi_project = phi.clone()
-        phi_project[..., self.num_dims:] = phi[..., self.num_dims:].clamp(self.min_var, self.max_var)
+        # phi_project[..., self.num_dims:] = phi[..., self.num_dims:].clamp(self.min_var, self.max_var)  #TODO: TEMP!
 
         return phi_project
 
@@ -487,7 +488,8 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         return reparam
 
     def sufficient_statistics(self, x):
-        t_x = (x.unsqueeze(dim=-1) @ x.unsqueeze(dim=-2)).flatten(start_dim=-2)
+        # TODO: Some papers have the -1/2, some dont
+        t_x = -(x.unsqueeze(dim=-1) @ x.unsqueeze(dim=-2)).flatten(start_dim=-2) / 2.
 
         if len(x.shape) == 2:
             return torch.stack((x, t_x), -1)
@@ -497,37 +499,44 @@ class MultivariateNormalArray(ExponentialFamilyArray):
             raise AssertionError("Input must be 2 or 3 dimensional tensor.")
 
     def expectation_to_natural(self, phi):
+        phi = phi.clone()
         var = phi[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
-
-        # Add noise to ensure matrix invertability
-        epsilon = 1e-6  # TODO: tune value
-        var += torch.diag(torch.tensor([epsilon] * self.num_dims)).to(var.device)
-        var_inverse = var.inverse()
+        var_inverse = stable_matrix_inverse(var)
 
         theta1 = (var_inverse @ phi[..., :self.num_dims].unsqueeze(dim=-1)).squeeze(dim=-1)
         theta2 = -var_inverse.reshape((*var_inverse.size()[:-2], self.num_dims ** 2)) / 2
         return torch.cat((theta1, theta2), -1)
 
-    # TODO: We currently only use the diagonal variance entries
     def log_normalizer(self, theta):
         theta = theta.clone()
-        theta_m = theta[..., self.num_dims:].reshape((*theta.size()[:-1], self.num_dims, self.num_dims))
-        theta_diag = theta_m.diagonal(dim1=-2, dim2=-1)
-        log_normalizer = -theta[..., :self.num_dims] ** 2 / (4 * theta_diag) - 0.5 * torch.log(-2. * theta_diag)
-        log_normalizer = torch.sum(log_normalizer, -1)
+        theta1, theta2 = theta[..., :self.num_dims], theta[..., self.num_dims:]
+        theta2 = theta2.reshape((*theta2.size()[:-1], self.num_dims, self.num_dims))
+
+        assert not torch.any(theta1.isnan())
+        assert not torch.any(theta2.isnan())
+
+        # Calculating trace "by hand", since torch.trace() doesnt support batches
+        trace = (stable_matrix_inverse(theta2) @ theta1.unsqueeze(dim=-1) @ theta1.unsqueeze(dim=-2))\
+            .diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+        # TODO: replace det().abs().log() with .logdet() at some point again?
+        log_normalizer = trace / 4. - theta2.det().abs().log() + self.num_dims * self.log_2pi / 2.  # TODO: Is d in paper = self.num_dims?
+
+        assert not torch.any(trace.isnan())
+        assert not torch.any(log_normalizer.isnan())
+
         return log_normalizer
 
     def log_h(self, x):
         return -0.5 * self.log_2pi * self.num_dims
 
     def _sample(self, num_samples, params, std_correction=1.0):
-        0/0  # TODO
         with torch.no_grad():
-            mu = params[..., 0:self.num_dims]
-            var = params[..., self.num_dims:] - mu**2
-            std = torch.sqrt(var)
-            shape = (num_samples,) + mu.shape
-            samples = mu.unsqueeze(0) + std_correction * std.unsqueeze(0) * torch.randn(shape, dtype=mu.dtype, device=mu.device)
+            mu = params[..., :self.num_dims]
+            cov = params[..., self.num_dims:].reshape((*params.size()[:-1], self.num_dims, self.num_dims))
+
+            distribution = torch.distributions.MultivariateNormal(mu, cov)
+            samples = distribution.rsample((num_samples,) + mu.shape)
+
             return shift_last_axis_to(samples, 2)
 
     def _argmax(self, params, **kwargs):

@@ -235,7 +235,7 @@ class EinsumNetwork(torch.nn.Module):
                     samples[:, keep_idx] = x[:, keep_idx]
 
                 if ifft:
-                    width = height = 14
+                    width = height = 28
                     fft_components = height // 2 + 1
                     samples = torch.complex(samples[..., 0], samples[..., 1]).reshape((-1, width, fft_components))
                     samples = torch.fft.irfft(samples, norm='ortho')
