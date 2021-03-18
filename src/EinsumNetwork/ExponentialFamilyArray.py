@@ -451,6 +451,87 @@ class NormalArray(ExponentialFamilyArray):
             return shift_last_axis_to(mu, 1)
 
 
+class MultivariateNormalArray(ExponentialFamilyArray):
+    """Implementation of a MVG."""
+
+    def __init__(self, num_var, num_dims, array_shape, min_var=0.0001, max_var=10., use_em=True):
+        super(MultivariateNormalArray, self).__init__(num_var, num_dims, array_shape, 2 * num_dims, use_em=use_em)
+        self.log_2pi = torch.tensor(1.8378770664093453)
+        self.min_var = min_var
+        self.max_var = max_var
+
+    def default_initializer(self):
+        phi = torch.empty(self.num_var, *self.array_shape, self.num_dims + self.num_dims ** 2)
+
+        with torch.no_grad():
+            # Init mean
+            phi[..., :self.num_dims] = torch.randn(self.num_var, *self.array_shape, self.num_dims)  # Init mean
+
+            # Init diagonal of covariance matrix as identity  # TODO: Change that probably!
+            phi[..., self.num_dims:] = torch.eye(self.num_dims).flatten()
+
+        return phi
+
+    def project_params(self, phi):
+        phi_project = phi.clone()
+        phi_project[..., self.num_dims:] = phi[..., self.num_dims:].clamp(self.min_var, self.max_var)
+
+        return phi_project
+
+    def reparam_function(self):
+        def reparam(params_in):
+            0/0  # TODO
+            mu = params_in[..., 0:self.num_dims].clone()
+            var = self.min_var + torch.sigmoid(params_in[..., self.num_dims:]) * (self.max_var - self.min_var)
+            return torch.cat((mu, var + mu**2), -1)
+        return reparam
+
+    def sufficient_statistics(self, x):
+        t_x = (x.unsqueeze(dim=-1) @ x.unsqueeze(dim=-2)).flatten(start_dim=-2)
+
+        if len(x.shape) == 2:
+            return torch.stack((x, t_x), -1)
+        elif len(x.shape) == 3:
+            return torch.cat((x, t_x), -1)
+        else:
+            raise AssertionError("Input must be 2 or 3 dimensional tensor.")
+
+    def expectation_to_natural(self, phi):
+        var = phi[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
+        var_inverse = var.inverse()
+        theta1 = torch.einsum('abcmn, abcnz->abcmz', var_inverse, phi[..., :self.num_dims].unsqueeze(dim=-1))\
+            .squeeze(dim=-1)  # TODO: recheck if correct
+        theta2 = -var_inverse.reshape((*var_inverse.size()[:-2], self.num_dims ** 2)) / 2
+        return torch.cat((theta1, theta2), -1)
+
+    # TODO: We currently only use the diagonal variance entries
+    def log_normalizer(self, theta):
+        theta = theta.clone()
+        theta_m = theta[..., self.num_dims:].reshape((*theta.size()[:-1], self.num_dims, self.num_dims))
+        theta_diag = theta_m.diagonal(dim1=-2, dim2=-1)
+        log_normalizer = -theta[..., :self.num_dims] ** 2 / (4 * theta_diag) - 0.5 * torch.log(-2. * theta_diag)
+        log_normalizer = torch.sum(log_normalizer, -1)
+        return log_normalizer
+
+    def log_h(self, x):
+        return -0.5 * self.log_2pi * self.num_dims
+
+    def _sample(self, num_samples, params, std_correction=1.0):
+        0/0  # TODO
+        with torch.no_grad():
+            mu = params[..., 0:self.num_dims]
+            var = params[..., self.num_dims:] - mu**2
+            std = torch.sqrt(var)
+            shape = (num_samples,) + mu.shape
+            samples = mu.unsqueeze(0) + std_correction * std.unsqueeze(0) * torch.randn(shape, dtype=mu.dtype, device=mu.device)
+            return shift_last_axis_to(samples, 2)
+
+    def _argmax(self, params, **kwargs):
+        with torch.no_grad():
+            mu = params[..., :self.num_dims]
+            return shift_last_axis_to(mu, 1)
+
+
 class BinomialArray(ExponentialFamilyArray):
     """Implementation of Binomial distribution."""
 

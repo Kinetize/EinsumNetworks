@@ -65,7 +65,7 @@ class EinsumNetwork(torch.nn.Module):
         num_nodes is the number of nodes which are realized in parallel using this layer.
     Thus, in classical PCs, we would interpret the each layer as a collection of vector_length * num_nodes PC nodes.
 
-    The class EinsumNetork mainly governs the layer-wise layout, initialization, forward() calls, EM learning, etc.
+    The class EinsumNetwork mainly governs the layer-wise layout, initialization, forward() calls, EM learning, etc.
     """
 
     def __init__(self, graph, args=None):
