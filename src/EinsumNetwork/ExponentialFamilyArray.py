@@ -1,4 +1,6 @@
 import torch
+import numpy as np
+
 from utils import one_hot, stable_matrix_inverse
 
 
@@ -451,6 +453,7 @@ class NormalArray(ExponentialFamilyArray):
             return shift_last_axis_to(mu, 1)
 
 
+# TODO: Remove unnecessary .clone() calls
 class MultivariateNormalArray(ExponentialFamilyArray):
     """Implementation of a MVG."""
 
@@ -459,23 +462,32 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         self.log_2pi = torch.tensor(1.8378770664093453)
         self.min_var = min_var
         self.max_var = max_var
+        self.log_min_var = np.log(min_var)
+        self.log_max_var = np.log(max_var)
+
+        self.l_len = (self.num_dims ** 2 - self.num_dims) // 2
+        self.amt_ldl_params = self.num_dims + self.l_len
 
     def default_initializer(self):
-        phi = torch.empty(self.num_var, *self.array_shape, self.num_dims + self.num_dims ** 2)
+        phi = torch.empty(self.num_var, *self.array_shape, self.num_dims + self.amt_ldl_params)
 
         with torch.no_grad():
             # Init mean
-            phi[..., :self.num_dims] = torch.randn(self.num_var, *self.array_shape, self.num_dims)  # Init mean
+            phi[..., :self.num_dims] = torch.randn(self.num_var, *self.array_shape, self.num_dims)
 
-            # Init diagonal of covariance matrix as identity  # TODO: Change that probably!
-            cov_ = torch.randn(self.num_dims, self.num_dims)
-            phi[..., self.num_dims:] = (cov_ @ cov_.t()).flatten()
+            # Init parameters for LDL composition of covariance matrix
+            phi[..., self.num_dims:] = torch.randn(self.num_var, *self.array_shape, self.amt_ldl_params)
 
         return phi
 
     def project_params(self, phi):
         phi_project = phi.clone()
-        # phi_project[..., self.num_dims:] = phi[..., self.num_dims:].clamp(self.min_var, self.max_var)  #TODO: TEMP!
+
+        # Limit var of diagonal matrix D based on logarithm
+        phi_project[..., self.num_dims:] = phi[..., self.num_dims:-self.l_len].clamp(self.log_min_var, self.log_max_var)
+
+        # Limit var of lower triangular matrix L
+        phi_project[..., self.num_dims:] = phi[..., -self.l_len:].clamp(self.min_var, self.min_var)
 
         return phi_project
 
@@ -500,11 +512,11 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
     def expectation_to_natural(self, phi):
         phi = phi.clone()
-        var = phi[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
-        var_inverse = stable_matrix_inverse(var)
+        cov = self.get_cov(phi)
+        cov_inverse = cov.inverse()
 
-        theta1 = (var_inverse @ phi[..., :self.num_dims].unsqueeze(dim=-1)).squeeze(dim=-1)
-        theta2 = -var_inverse.reshape((*var_inverse.size()[:-2], self.num_dims ** 2)) / 2
+        theta1 = (cov_inverse @ phi[..., :self.num_dims].unsqueeze(dim=-1)).squeeze(dim=-1)
+        theta2 = -cov_inverse.reshape((*cov_inverse.size()[:-2], self.num_dims ** 2)) / 2
         return torch.cat((theta1, theta2), -1)
 
     def log_normalizer(self, theta):
@@ -512,17 +524,12 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         theta1, theta2 = theta[..., :self.num_dims], theta[..., self.num_dims:]
         theta2 = theta2.reshape((*theta2.size()[:-1], self.num_dims, self.num_dims))
 
-        assert not torch.any(theta1.isnan())
-        assert not torch.any(theta2.isnan())
-
         # Calculating trace "by hand", since torch.trace() doesnt support batches
         trace = (stable_matrix_inverse(theta2) @ theta1.unsqueeze(dim=-1) @ theta1.unsqueeze(dim=-2))\
             .diagonal(dim1=-2, dim2=-1).sum(dim=-1)
         # TODO: replace det().abs().log() with .logdet() at some point again?
+        # TODO: Use special logdet trick from paper!
         log_normalizer = trace / 4. - theta2.det().abs().log() + self.num_dims * self.log_2pi / 2.  # TODO: Is d in paper = self.num_dims?
-
-        assert not torch.any(trace.isnan())
-        assert not torch.any(log_normalizer.isnan())
 
         return log_normalizer
 
@@ -543,6 +550,13 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         with torch.no_grad():
             mu = params[..., :self.num_dims]
             return shift_last_axis_to(mu, 1)
+
+    def get_cov(self, phi):
+        D = torch.diag_embed(torch.exp(phi[..., self.num_dims:-self.l_len]))
+        L = torch.diag_embed(torch.ones_like(phi[..., self.num_dims:-self.l_len]))
+        L[..., 1, 0] = phi[..., -1]  # TODO: Adjust to be generic for all num_dims
+
+        return L @ D @ L.transpose(dim0=-2, dim1=-1)
 
 
 class BinomialArray(ExponentialFamilyArray):
