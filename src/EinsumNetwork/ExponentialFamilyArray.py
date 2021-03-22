@@ -451,6 +451,7 @@ class NormalArray(ExponentialFamilyArray):
             return shift_last_axis_to(mu, 1)
 
 
+# TODO: Remove unnecessary .clone() calls
 class MultivariateNormalArray(ExponentialFamilyArray):
     """Implementation of a MVG."""
 
@@ -467,15 +468,22 @@ class MultivariateNormalArray(ExponentialFamilyArray):
             # Init mean
             phi[..., :self.num_dims] = torch.randn(self.num_var, *self.array_shape, self.num_dims)  # Init mean
 
-            # Init diagonal of covariance matrix as identity  # TODO: Change that probably!
-            cov_ = torch.randn(self.num_dims, self.num_dims)
-            phi[..., self.num_dims:] = (cov_ @ cov_.t()).flatten()
+            # Init random positive, definitive matrix
+            cov_ = torch.randn(self.num_var, *self.array_shape, self.num_dims, self.num_dims)
+            cov = cov_ @ cov_.transpose(dim0=-2, dim1=-1)
+
+            import numpy as np
+            assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
+
+            phi[..., self.num_dims:] = cov.flatten(start_dim=-2)
 
         return phi
 
     def project_params(self, phi):
         phi_project = phi.clone()
-        # phi_project[..., self.num_dims:] = phi[..., self.num_dims:].clamp(self.min_var, self.max_var)  #TODO: TEMP!
+        # cov = phi_project[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
+        # cov[..., range(self.num_dims), range(self.num_dims)] = cov.diagonal(dim1=-2, dim2=-1).clamp(self.min_var, self.max_var)
+        # phi_project[..., self.num_dims:] = cov.flatten(start_dim=-2)
 
         return phi_project
 
@@ -489,7 +497,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
     def sufficient_statistics(self, x):
         # TODO: Some papers have the -1/2, some dont
-        t_x = -(x.unsqueeze(dim=-1) @ x.unsqueeze(dim=-2)).flatten(start_dim=-2) / 2.
+        t_x = (x.unsqueeze(dim=-1) @ x.unsqueeze(dim=-2)).flatten(start_dim=-2)
 
         if len(x.shape) == 2:
             return torch.stack((x, t_x), -1)
@@ -501,7 +509,9 @@ class MultivariateNormalArray(ExponentialFamilyArray):
     def expectation_to_natural(self, phi):
         phi = phi.clone()
         var = phi[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
-        var_inverse = stable_matrix_inverse(var)
+        import numpy as np
+        assert np.all(np.linalg.eigvalsh(var.cpu().numpy()) > -1e-6)
+        var_inverse = var.inverse()
 
         theta1 = (var_inverse @ phi[..., :self.num_dims].unsqueeze(dim=-1)).squeeze(dim=-1)
         theta2 = -var_inverse.reshape((*var_inverse.size()[:-2], self.num_dims ** 2)) / 2
@@ -534,8 +544,11 @@ class MultivariateNormalArray(ExponentialFamilyArray):
             mu = params[..., :self.num_dims]
             cov = params[..., self.num_dims:].reshape((*params.size()[:-1], self.num_dims, self.num_dims))
 
+            import numpy as np
+            assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
+
             distribution = torch.distributions.MultivariateNormal(mu, cov)
-            samples = distribution.rsample((num_samples,) + mu.shape)
+            samples = distribution.rsample((num_samples,))
 
             return shift_last_axis_to(samples, 2)
 
