@@ -470,7 +470,11 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
             # Init random positive, definitive matrix
             cov_ = torch.randn(self.num_var, *self.array_shape, self.num_dims, self.num_dims)
+            # cov_ = torch.stack([torch.stack([torch.stack([torch.diag(torch.randn(self.num_dims)) for j in range(7)])]) for i in range(420)])
+            cov_.inverse()
             cov = cov_ @ cov_.transpose(dim0=-2, dim1=-1)
+            print(torch.linalg.norm(cov, dim=(-2, -1)).mean())
+            cov.inverse()
 
             import numpy as np
             assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
@@ -479,11 +483,42 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
         return phi
 
+    # TODO: What normalization have we all tried etc? see in chat with zhongjie, write about that in thesis
+    # Also tried cov - mu @ mu.t, but that didnt work either...
     def project_params(self, phi):
         phi_project = phi.clone()
-        # cov = phi_project[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
+
+        mu = phi_project[..., :self.num_dims]
+        mu2 = mu.unsqueeze(dim=-1) @ mu.unsqueeze(dim=-2)
+        cov = phi_project[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
+        #
+        cov -= mu2
+        # cov = torch.clamp(cov, self.min_var, self.max_var)
+        # cov = cov * 0.5
+        cov += mu2
+        # norm = torch.linalg.norm(cov, dim=(-2, -1))
+        # # print(norm.mean())
+        #
+        # max_norm = 500
+        # indices_to_change = (norm > max_norm).type(torch.uint8)
+        # indices_to_change = torch.cat([indices_to_change.unsqueeze(dim=-1)] * self.num_dims, dim=-1)
+        # indices_to_change = torch.cat([indices_to_change.unsqueeze(dim=-1)] * self.num_dims, dim=-1)
+        #
+        # norm_expanded = torch.cat([norm.unsqueeze(dim=-1)] * self.num_dims, dim=-1)
+        # norm_expanded = torch.cat([norm_expanded.unsqueeze(dim=-1)] * self.num_dims, dim=-1)
+        #
+        # cov = (1 - indices_to_change) * cov + indices_to_change * cov / norm_expanded * (max_norm if False else 1)
+        # # print(f'Normalized to {torch.linalg.norm(cov, dim=(-2, -1)).mean()}')
+        #
+        # import numpy as np
+        # assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
+        # cov = cov * 0.5
         # cov[..., range(self.num_dims), range(self.num_dims)] = cov.diagonal(dim1=-2, dim2=-1).clamp(self.min_var, self.max_var)
-        # phi_project[..., self.num_dims:] = cov.flatten(start_dim=-2)
+        phi_project[..., self.num_dims:] = cov.flatten(start_dim=-2)
+
+        # if torch.any(phi_project.isnan()):
+        #     print('asfsdgsdfgdfgd')
+        #     pass
 
         return phi_project
 
@@ -526,9 +561,9 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         assert not torch.any(theta2.isnan())
 
         # Calculating trace "by hand", since torch.trace() doesnt support batches
-        trace = (stable_matrix_inverse(theta2) @ theta1.unsqueeze(dim=-1) @ theta1.unsqueeze(dim=-2))\
+        # TODO: Why do we still need to use stable_matrix_inverse here?
+        trace = (stable_matrix_inverse(theta2, epsilon=1e-12) @ theta1.unsqueeze(dim=-1) @ theta1.unsqueeze(dim=-2))\
             .diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-        # TODO: replace det().abs().log() with .logdet() at some point again?
         log_normalizer = trace / 4. - theta2.det().abs().log() + self.num_dims * self.log_2pi / 2.  # TODO: Is d in paper = self.num_dims?
 
         assert not torch.any(trace.isnan())

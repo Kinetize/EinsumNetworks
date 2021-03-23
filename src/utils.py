@@ -60,7 +60,6 @@ def sample_matrix_categorical(p):
 
 
 # TODO: Tune epsilon!
-def stable_matrix_inverse(a, epsilon=1e-6):
+def stable_matrix_inverse(a, epsilon=1e-12):
     # Add noise to ensure matrix invertability
-    # return (a + torch.diag(torch.tensor([epsilon] * a.size()[-1])).to(a.device)).inverse()
-    return a.inverse()  # TODO: Maybe we dont need epsilon anymore!
+    return (a + torch.diag(torch.tensor([epsilon] * a.size()[-1])).to(a.device)).inverse()

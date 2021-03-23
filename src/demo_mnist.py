@@ -22,8 +22,8 @@ fashion_mnist = False
 
 # exponential_family = EinsumNetwork.BinomialArray
 # exponential_family = EinsumNetwork.CategoricalArray
-# exponential_family = EinsumNetwork.NormalArray
-exponential_family = EinsumNetwork.MultivariateNormalArray
+exponential_family = EinsumNetwork.NormalArray
+# exponential_family = EinsumNetwork.MultivariateNormalArray
 
 classes = [7]
 # classes = list(range(10))
@@ -32,10 +32,11 @@ classes = [7]
 
 K = 1
 
-width = 28
+# TODO: seems like i have exchanged width and height about everywhere, even in data loader!
+width = 10
 height = 28
-fft_components = width // 2 + 1
-input_size = height * fft_components
+fft_components = height // 2 + 1
+input_size = width * fft_components
 
 # structure = 'poon-domingos'
 structure = 'binary-trees'
@@ -64,7 +65,7 @@ if exponential_family == EinsumNetwork.CategoricalArray:
 if exponential_family == EinsumNetwork.NormalArray:
     exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
 if exponential_family == EinsumNetwork.MultivariateNormalArray:
-    exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
+    exponential_family_args = {'min_var': 1e-6, 'max_var': 100}
 
 # get data
 if fashion_mnist:
@@ -73,8 +74,8 @@ else:
     train_x_raw, train_labels, test_x_raw, test_labels = datasets.load_mnist(width, height)
 
 # TODO: Rework this section
-train_x = torch.fft.rfft(torch.tensor(train_x_raw.reshape((-1, width, height))), norm='ortho')
-test_x = torch.fft.rfft(torch.tensor(test_x_raw.reshape((-1, width, height))), norm='ortho')
+train_x = torch.fft.rfft(torch.tensor(train_x_raw.reshape((-1, width, height))), norm='forward')
+test_x = torch.fft.rfft(torch.tensor(test_x_raw.reshape((-1, width, height))), norm='forward')
 
 train_x = train_x.reshape((-1, train_x.shape[1] * train_x.shape[2]))
 test_x = test_x.reshape((-1, test_x.shape[1] * test_x.shape[2]))
@@ -134,6 +135,7 @@ train_N = train_x.shape[0]
 valid_N = valid_x.shape[0]
 test_N = test_x.shape[0]
 
+lls = []
 for epoch_count in range(num_epochs):
 
     ##### evaluate
@@ -141,6 +143,7 @@ for epoch_count in range(num_epochs):
     train_ll = EinsumNetwork.eval_loglikelihood_batched(einet, train_x, batch_size=batch_size)
     valid_ll = EinsumNetwork.eval_loglikelihood_batched(einet, valid_x, batch_size=batch_size)
     test_ll = EinsumNetwork.eval_loglikelihood_batched(einet, test_x, batch_size=batch_size)
+    lls.append((train_ll / train_N, valid_ll / valid_N, test_ll / test_N))
     print("[{}]   train LL {}   valid LL {}   test LL {}".format(
         epoch_count,
         train_ll / train_N,
@@ -163,6 +166,22 @@ for epoch_count in range(num_epochs):
         total_ll += log_likelihood.detach().item()
 
     einet.em_update()
+
+import matplotlib.pyplot as plt
+
+x = list(range(num_epochs))
+plt.plot(x, [ll[0] for ll in lls], label='train')
+plt.plot(x, [ll[1] for ll in lls], label='val')
+plt.plot(x, [ll[2] for ll in lls], label='test')
+plt.legend()
+plt.show()
+
+x = list(range(1, num_epochs))
+plt.plot(x, [ll[0] for i, ll in enumerate(lls) if i > 0], label='train')
+plt.plot(x, [ll[1] for i, ll in enumerate(lls) if i > 0], label='val')
+plt.plot(x, [ll[2] for i, ll in enumerate(lls) if i > 0], label='test')
+plt.legend()
+plt.show()
 
 if fashion_mnist:
     model_dir = '../models/einet/demo_fashion_mnist/'

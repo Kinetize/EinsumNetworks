@@ -70,10 +70,13 @@ def load_mnist(width=28, height=28, original_width=28, original_height=28):
     train_labels = np.asarray(train_labels)
     test_labels = np.asarray(test_labels)
 
-    # Resize if needed
-    if width != original_width or height != original_height:
-        train_x = resize(train_x, (60000, width, height))
-        test_x = resize(test_x, (10000, width, height))
+    # # Resize if needed
+    # if width != original_width or height != original_height:
+    #     train_x = resize(train_x, (60000, width, height))
+    #     test_x = resize(test_x, (10000, width, height))
+
+    train_x = train_x[:, 9:19]
+    test_x = test_x[:, 9:19]
 
     train_x = train_x.reshape((60000, width * height))
     test_x = test_x.reshape((10000, width * height))
