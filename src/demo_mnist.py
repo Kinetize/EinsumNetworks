@@ -22,8 +22,8 @@ fashion_mnist = False
 
 # exponential_family = EinsumNetwork.BinomialArray
 # exponential_family = EinsumNetwork.CategoricalArray
-exponential_family = EinsumNetwork.NormalArray
-# exponential_family = EinsumNetwork.MultivariateNormalArray
+# exponential_family = EinsumNetwork.NormalArray
+exponential_family = EinsumNetwork.MultivariateNormalArray
 
 classes = [7]
 # classes = list(range(10))
@@ -33,7 +33,7 @@ classes = [7]
 K = 1
 
 # TODO: seems like i have exchanged width and height about everywhere, even in data loader!
-width = 10
+width = 28
 height = 28
 fft_components = height // 2 + 1
 input_size = width * fft_components
@@ -65,7 +65,7 @@ if exponential_family == EinsumNetwork.CategoricalArray:
 if exponential_family == EinsumNetwork.NormalArray:
     exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
 if exponential_family == EinsumNetwork.MultivariateNormalArray:
-    exponential_family_args = {'min_var': 1e-6, 'max_var': 100}
+    exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
 
 # get data
 if fashion_mnist:

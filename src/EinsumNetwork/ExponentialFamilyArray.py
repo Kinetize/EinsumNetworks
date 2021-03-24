@@ -357,11 +357,29 @@ class ExponentialFamilyArray(torch.nn.Module):
             return
 
         with torch.no_grad():
+
+            # param_update = (self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
+            # mu_update = param_update[..., :self.num_dims]
+            # cov_update = param_update[..., self.num_dims:].reshape(150, 1, 7, 2, 2)  # - mu_update ** 2
+            #
+            # cov_update[..., range(self.num_dims), range(self.num_dims)] += 1e-3
+            # l = torch.torch.linalg.cholesky(cov_update)
+            # l = torch.cat([l.diagonal(dim1=-2, dim2=-1), l[..., 1, 0:1]], dim=-1)
+
+            t_x = self._stats_acc[..., self.num_dims:].clone().reshape((*self._stats_acc.size()[:-1], self.num_dims, self.num_dims))
+            t_x[..., range(self.num_dims), range(self.num_dims)] += 1e-3
+            t_x_ = torch.torch.linalg.cholesky(t_x)
+            t_x_ = torch.cat([t_x_.diagonal(dim1=-2, dim2=-1), t_x_[..., 1, 0:1]], dim=-1)
+
+            stats_acc = torch.zeros(*self._stats_acc.size()[:-1], self._stats_acc.size()[-1] - 1).to(self._stats_acc.device)
+            stats_acc[..., :self.num_dims] = self._stats_acc[..., :self.num_dims]
+            stats_acc[..., self.num_dims:] = t_x_
+
             if self._online_em_stepsize is None:
                 self.params.data = self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12)
             else:
                 s = self._online_em_stepsize
-                self.params.data = (1. - s) * self.params + s * (self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
+                self.params.data = (1. - s) * self.params + s * (stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
             self.params.data = self.project_params(self.params.data)
 
         self._p_acc = None
@@ -462,24 +480,28 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         self.max_var = max_var
 
     def default_initializer(self):
-        phi = torch.empty(self.num_var, *self.array_shape, self.num_dims + self.num_dims ** 2)
+        # TODO: Correct formula for dims
+        phi = torch.empty(self.num_var, *self.array_shape, self.num_dims + self.num_dims ** 2 - 1)
 
         with torch.no_grad():
             # Init mean
             phi[..., :self.num_dims] = torch.randn(self.num_var, *self.array_shape, self.num_dims)  # Init mean
 
             # Init random positive, definitive matrix
-            cov_ = torch.randn(self.num_var, *self.array_shape, self.num_dims, self.num_dims)
+            # cov_ = torch.randn(self.num_var, *self.array_shape, self.num_dims, self.num_dims)
             # cov_ = torch.stack([torch.stack([torch.stack([torch.diag(torch.randn(self.num_dims)) for j in range(7)])]) for i in range(420)])
-            cov_.inverse()
-            cov = cov_ @ cov_.transpose(dim0=-2, dim1=-1)
-            print(torch.linalg.norm(cov, dim=(-2, -1)).mean())
-            cov.inverse()
+            # TODO: Myb initialize the corner element as well?
+            # cov_ = torch.diag_embed(1. + phi[..., :self.num_dims] ** 2)
+            # cov_.inverse()
+            # cov = cov_ @ cov_.transpose(dim0=-2, dim1=-1)
+            # print(torch.linalg.norm(cov, dim=(-2, -1)).mean())
+            # cov.inverse()
 
-            import numpy as np
-            assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
+            # import numpy as np
+            # assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
 
-            phi[..., self.num_dims:] = cov.flatten(start_dim=-2)
+            phi[..., self.num_dims:] = \
+                torch.cat([1. + phi[..., :self.num_dims] ** 2, torch.zeros(*phi.size()[:-1], 1)], dim=-1)
 
         return phi
 
@@ -488,14 +510,32 @@ class MultivariateNormalArray(ExponentialFamilyArray):
     def project_params(self, phi):
         phi_project = phi.clone()
 
-        mu = phi_project[..., :self.num_dims]
-        mu2 = mu.unsqueeze(dim=-1) @ mu.unsqueeze(dim=-2)
-        cov = phi_project[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
+        phi_project[..., self.num_dims:-1] = torch.clamp(phi_project[..., self.num_dims:-1], self.min_var, self.max_var)
+
+        # mu = phi_project[..., :self.num_dims]
+        # mu2 = mu.unsqueeze(dim=-1) @ mu.unsqueeze(dim=-2)
+        # cov_ = phi_project[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
+        # cov = cov_ @ cov_.transpose(-2, -1)
+
+        # cov = torch.clamp(cov, 0.00000001, float('nan'))
+        # cov += torch.stack([torch.stack([torch.stack([torch.diag(torch.ones(self.num_dims) * 1e-4).to(cov.device) for j in range(7)])]) for i in range(150)])
+
+        # for i in range(150):
+        #     for j in range(7):
+        #         if cov[i, 0, j, 0, 0] < 0.00000001:
+        #             cov[i, 0, j, 0, 0] = 0.00000001
+        #             cov[i, 0, j, 0, 1] = 0.0
+        #             cov[i, 0, j, 1, 0] = 0.0
+        #         if cov[i, 0, j, 1, 1] < 0.00000001:
+        #             cov[i, 0, j, 1, 1] = 0.00000001
+        #             cov[i, 0, j, 0, 1] = 0.0
+        #             cov[i, 0, j, 1, 0] = 0.0
+
         #
-        cov -= mu2
+        # cov -= mu2
         # cov = torch.clamp(cov, self.min_var, self.max_var)
         # cov = cov * 0.5
-        cov += mu2
+        # cov += mu2
         # norm = torch.linalg.norm(cov, dim=(-2, -1))
         # # print(norm.mean())
         #
@@ -514,7 +554,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         # assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
         # cov = cov * 0.5
         # cov[..., range(self.num_dims), range(self.num_dims)] = cov.diagonal(dim1=-2, dim2=-1).clamp(self.min_var, self.max_var)
-        phi_project[..., self.num_dims:] = cov.flatten(start_dim=-2)
+        # phi_project[..., self.num_dims:] = cov.flatten(start_dim=-2)
 
         # if torch.any(phi_project.isnan()):
         #     print('asfsdgsdfgdfgd')
@@ -532,7 +572,12 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
     def sufficient_statistics(self, x):
         # TODO: Some papers have the -1/2, some dont
+        import numpy as np
+        x = x.clone()
+        # x += 1e-2
         t_x = (x.unsqueeze(dim=-1) @ x.unsqueeze(dim=-2)).flatten(start_dim=-2)
+        # t_x[t_x == 0] = 1e-6
+        # _x += torch.randn(t_x.size()).to(t_x.device) / 100
 
         if len(x.shape) == 2:
             return torch.stack((x, t_x), -1)
@@ -543,7 +588,11 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
     def expectation_to_natural(self, phi):
         phi = phi.clone()
-        var = phi[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
+        var_ = torch.zeros(*phi.size()[:-1], self.num_dims, self.num_dims).to(phi.device)
+        var_[..., range(self.num_dims), range(self.num_dims)] = phi[..., self.num_dims:-1]
+        var_[..., 1, 0] = phi[..., -1]
+        var = var_ @ var_.transpose(-2, -1)
+
         import numpy as np
         assert np.all(np.linalg.eigvalsh(var.cpu().numpy()) > -1e-6)
         var_inverse = var.inverse()
@@ -564,7 +613,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         # TODO: Why do we still need to use stable_matrix_inverse here?
         trace = (stable_matrix_inverse(theta2, epsilon=1e-12) @ theta1.unsqueeze(dim=-1) @ theta1.unsqueeze(dim=-2))\
             .diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-        log_normalizer = trace / 4. - theta2.det().abs().log() + self.num_dims * self.log_2pi / 2.  # TODO: Is d in paper = self.num_dims?
+        log_normalizer = trace / 4. - theta2.logdet() + self.num_dims * self.log_2pi / 2.  # TODO: Is d in paper = self.num_dims?
 
         assert not torch.any(trace.isnan())
         assert not torch.any(log_normalizer.isnan())
@@ -577,12 +626,15 @@ class MultivariateNormalArray(ExponentialFamilyArray):
     def _sample(self, num_samples, params, std_correction=1.0):
         with torch.no_grad():
             mu = params[..., :self.num_dims]
-            cov = params[..., self.num_dims:].reshape((*params.size()[:-1], self.num_dims, self.num_dims))
+            var_ = torch.zeros(*params.size()[:-1], self.num_dims, self.num_dims).to(params.device)
+            var_[..., range(self.num_dims), range(self.num_dims)] = params[..., self.num_dims:-1]
+            var_[..., 1, 0] = params[..., -1]
+            var = var_ @ var_.transpose(-2, -1)
 
             import numpy as np
-            assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
+            assert np.all(np.linalg.eigvalsh(var.cpu().numpy()) > -1e-6)
 
-            distribution = torch.distributions.MultivariateNormal(mu, cov)
+            distribution = torch.distributions.MultivariateNormal(mu, var)
             samples = distribution.rsample((num_samples,))
 
             return shift_last_axis_to(samples, 2)
