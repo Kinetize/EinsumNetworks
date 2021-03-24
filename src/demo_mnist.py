@@ -136,6 +136,10 @@ valid_N = valid_x.shape[0]
 test_N = test_x.shape[0]
 
 lls = []
+import datetime as dt
+
+a = dt.datetime.now()
+
 for epoch_count in range(num_epochs):
 
     ##### evaluate
@@ -166,6 +170,8 @@ for epoch_count in range(num_epochs):
         total_ll += log_likelihood.detach().item()
 
     einet.em_update()
+
+print((dt.datetime.now()-a).total_seconds())
 
 import matplotlib.pyplot as plt
 

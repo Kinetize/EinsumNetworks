@@ -358,29 +358,31 @@ class ExponentialFamilyArray(torch.nn.Module):
 
         with torch.no_grad():
 
-            # param_update = (self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
-            # mu_update = param_update[..., :self.num_dims]
-            # cov_update = param_update[..., self.num_dims:].reshape(150, 1, 7, 2, 2)  # - mu_update ** 2
-            #
-            # cov_update[..., range(self.num_dims), range(self.num_dims)] += 1e-3
-            # l = torch.torch.linalg.cholesky(cov_update)
-            # l = torch.cat([l.diagonal(dim1=-2, dim2=-1), l[..., 1, 0:1]], dim=-1)
+            mvg = True
+            if mvg:
+                t_x = self._stats_acc[..., self.num_dims:].clone().reshape((*self._stats_acc.size()[:-1], self.num_dims, self.num_dims))
+                t_x[..., range(self.num_dims), range(self.num_dims)] += 1e-3
+                t_x_ = torch.linalg.cholesky(t_x)
+                t_x_ = torch.cat([t_x_.diagonal(dim1=-2, dim2=-1), t_x_[..., 1, 0:1]], dim=-1)
 
-            t_x = self._stats_acc[..., self.num_dims:].clone().reshape((*self._stats_acc.size()[:-1], self.num_dims, self.num_dims))
-            t_x[..., range(self.num_dims), range(self.num_dims)] += 1e-3
-            t_x_ = torch.torch.linalg.cholesky(t_x)
-            t_x_ = torch.cat([t_x_.diagonal(dim1=-2, dim2=-1), t_x_[..., 1, 0:1]], dim=-1)
+                stats_acc = torch.zeros(*self._stats_acc.size()[:-1], self._stats_acc.size()[-1] - 1).to(self._stats_acc.device)
+                stats_acc[..., :self.num_dims] = self._stats_acc[..., :self.num_dims]
+                stats_acc[..., self.num_dims:] = t_x_
 
-            stats_acc = torch.zeros(*self._stats_acc.size()[:-1], self._stats_acc.size()[-1] - 1).to(self._stats_acc.device)
-            stats_acc[..., :self.num_dims] = self._stats_acc[..., :self.num_dims]
-            stats_acc[..., self.num_dims:] = t_x_
+                if self._online_em_stepsize is None:
+                    self.params.data = self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12)
+                else:
+                    s = self._online_em_stepsize
+                    self.params.data = (1. - s) * self.params + s * (stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
+                self.params.data = self.project_params(self.params.data)
 
-            if self._online_em_stepsize is None:
-                self.params.data = self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12)
             else:
-                s = self._online_em_stepsize
-                self.params.data = (1. - s) * self.params + s * (stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
-            self.params.data = self.project_params(self.params.data)
+                if self._online_em_stepsize is None:
+                    self.params.data = self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12)
+                else:
+                    s = self._online_em_stepsize
+                    self.params.data = (1. - s) * self.params + s * (self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
+                self.params.data = self.project_params(self.params.data)
 
         self._p_acc = None
         self._stats_acc = None
@@ -487,19 +489,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
             # Init mean
             phi[..., :self.num_dims] = torch.randn(self.num_var, *self.array_shape, self.num_dims)  # Init mean
 
-            # Init random positive, definitive matrix
-            # cov_ = torch.randn(self.num_var, *self.array_shape, self.num_dims, self.num_dims)
-            # cov_ = torch.stack([torch.stack([torch.stack([torch.diag(torch.randn(self.num_dims)) for j in range(7)])]) for i in range(420)])
-            # TODO: Myb initialize the corner element as well?
-            # cov_ = torch.diag_embed(1. + phi[..., :self.num_dims] ** 2)
-            # cov_.inverse()
-            # cov = cov_ @ cov_.transpose(dim0=-2, dim1=-1)
-            # print(torch.linalg.norm(cov, dim=(-2, -1)).mean())
-            # cov.inverse()
-
-            # import numpy as np
-            # assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
-
+            # Init CD of covariance matrix
             phi[..., self.num_dims:] = \
                 torch.cat([1. + phi[..., :self.num_dims] ** 2, torch.zeros(*phi.size()[:-1], 1)], dim=-1)
 
@@ -510,55 +500,8 @@ class MultivariateNormalArray(ExponentialFamilyArray):
     def project_params(self, phi):
         phi_project = phi.clone()
 
+        # Project diagonal to a given variance interval
         phi_project[..., self.num_dims:-1] = torch.clamp(phi_project[..., self.num_dims:-1], self.min_var, self.max_var)
-
-        # mu = phi_project[..., :self.num_dims]
-        # mu2 = mu.unsqueeze(dim=-1) @ mu.unsqueeze(dim=-2)
-        # cov_ = phi_project[..., self.num_dims:].reshape((*phi.size()[:-1], self.num_dims, self.num_dims))
-        # cov = cov_ @ cov_.transpose(-2, -1)
-
-        # cov = torch.clamp(cov, 0.00000001, float('nan'))
-        # cov += torch.stack([torch.stack([torch.stack([torch.diag(torch.ones(self.num_dims) * 1e-4).to(cov.device) for j in range(7)])]) for i in range(150)])
-
-        # for i in range(150):
-        #     for j in range(7):
-        #         if cov[i, 0, j, 0, 0] < 0.00000001:
-        #             cov[i, 0, j, 0, 0] = 0.00000001
-        #             cov[i, 0, j, 0, 1] = 0.0
-        #             cov[i, 0, j, 1, 0] = 0.0
-        #         if cov[i, 0, j, 1, 1] < 0.00000001:
-        #             cov[i, 0, j, 1, 1] = 0.00000001
-        #             cov[i, 0, j, 0, 1] = 0.0
-        #             cov[i, 0, j, 1, 0] = 0.0
-
-        #
-        # cov -= mu2
-        # cov = torch.clamp(cov, self.min_var, self.max_var)
-        # cov = cov * 0.5
-        # cov += mu2
-        # norm = torch.linalg.norm(cov, dim=(-2, -1))
-        # # print(norm.mean())
-        #
-        # max_norm = 500
-        # indices_to_change = (norm > max_norm).type(torch.uint8)
-        # indices_to_change = torch.cat([indices_to_change.unsqueeze(dim=-1)] * self.num_dims, dim=-1)
-        # indices_to_change = torch.cat([indices_to_change.unsqueeze(dim=-1)] * self.num_dims, dim=-1)
-        #
-        # norm_expanded = torch.cat([norm.unsqueeze(dim=-1)] * self.num_dims, dim=-1)
-        # norm_expanded = torch.cat([norm_expanded.unsqueeze(dim=-1)] * self.num_dims, dim=-1)
-        #
-        # cov = (1 - indices_to_change) * cov + indices_to_change * cov / norm_expanded * (max_norm if False else 1)
-        # # print(f'Normalized to {torch.linalg.norm(cov, dim=(-2, -1)).mean()}')
-        #
-        # import numpy as np
-        # assert np.all(np.linalg.eigvalsh(cov.cpu().numpy()) > -1e-6)
-        # cov = cov * 0.5
-        # cov[..., range(self.num_dims), range(self.num_dims)] = cov.diagonal(dim1=-2, dim2=-1).clamp(self.min_var, self.max_var)
-        # phi_project[..., self.num_dims:] = cov.flatten(start_dim=-2)
-
-        # if torch.any(phi_project.isnan()):
-        #     print('asfsdgsdfgdfgd')
-        #     pass
 
         return phi_project
 
@@ -571,13 +514,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         return reparam
 
     def sufficient_statistics(self, x):
-        # TODO: Some papers have the -1/2, some dont
-        import numpy as np
-        x = x.clone()
-        # x += 1e-2
         t_x = (x.unsqueeze(dim=-1) @ x.unsqueeze(dim=-2)).flatten(start_dim=-2)
-        # t_x[t_x == 0] = 1e-6
-        # _x += torch.randn(t_x.size()).to(t_x.device) / 100
 
         if len(x.shape) == 2:
             return torch.stack((x, t_x), -1)
@@ -613,7 +550,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         # TODO: Why do we still need to use stable_matrix_inverse here?
         trace = (stable_matrix_inverse(theta2, epsilon=1e-12) @ theta1.unsqueeze(dim=-1) @ theta1.unsqueeze(dim=-2))\
             .diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-        log_normalizer = trace / 4. - theta2.logdet() + self.num_dims * self.log_2pi / 2.  # TODO: Is d in paper = self.num_dims?
+        log_normalizer = trace / 4. - theta2.logdet() + self.num_dims * self.log_2pi / 2.
 
         assert not torch.any(trace.isnan())
         assert not torch.any(log_normalizer.isnan())
