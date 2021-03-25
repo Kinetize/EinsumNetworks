@@ -357,32 +357,13 @@ class ExponentialFamilyArray(torch.nn.Module):
             return
 
         with torch.no_grad():
-
-            mvg = True
-            if mvg:
-                t_x = self._stats_acc[..., self.num_dims:].clone().reshape((*self._stats_acc.size()[:-1], self.num_dims, self.num_dims))
-                t_x[..., range(self.num_dims), range(self.num_dims)] += 1e-3
-                t_x_ = torch.linalg.cholesky(t_x)
-                t_x_ = torch.cat([t_x_.diagonal(dim1=-2, dim2=-1), t_x_[..., 1, 0:1]], dim=-1)
-
-                stats_acc = torch.zeros(*self._stats_acc.size()[:-1], self._stats_acc.size()[-1] - 1).to(self._stats_acc.device)
-                stats_acc[..., :self.num_dims] = self._stats_acc[..., :self.num_dims]
-                stats_acc[..., self.num_dims:] = t_x_
-
-                if self._online_em_stepsize is None:
-                    self.params.data = self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12)
-                else:
-                    s = self._online_em_stepsize
-                    self.params.data = (1. - s) * self.params + s * (stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
-                self.params.data = self.project_params(self.params.data)
-
+            if self._online_em_stepsize is None:
+                self.params.data = self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12)
             else:
-                if self._online_em_stepsize is None:
-                    self.params.data = self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12)
-                else:
-                    s = self._online_em_stepsize
-                    self.params.data = (1. - s) * self.params + s * (self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
-                self.params.data = self.project_params(self.params.data)
+                s = self._online_em_stepsize
+                self.params.data = (1. - s) * self.params + s * (self._stats_acc / (self._p_acc.unsqueeze(-1) + 1e-12))
+
+            self.params.data = self.project_params(self.params.data)
 
         self._p_acc = None
         self._stats_acc = None
@@ -471,9 +452,8 @@ class NormalArray(ExponentialFamilyArray):
             return shift_last_axis_to(mu, 1)
 
 
-# TODO: Remove unnecessary .clone() calls
 class MultivariateNormalArray(ExponentialFamilyArray):
-    """Implementation of a MVG."""
+    """Implementation of a MVG learning the CD of the covariance matrix"""
 
     def __init__(self, num_var, num_dims, array_shape, min_var=0.0001, max_var=10., use_em=True):
         super(MultivariateNormalArray, self).__init__(num_var, num_dims, array_shape, 2 * num_dims, use_em=use_em)
@@ -481,9 +461,17 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         self.min_var = min_var
         self.max_var = max_var
 
+    @property
+    def cov_cd_size(self):
+        return (self.num_dims + 1) * self.num_dims // 2
+
+    @property
+    def cov_low_triangle_size(self):
+        return self.cov_cd_size - self.num_dims
+
     def default_initializer(self):
         # TODO: Correct formula for dims
-        phi = torch.empty(self.num_var, *self.array_shape, self.num_dims + self.num_dims ** 2 - 1)
+        phi = torch.empty(self.num_var, *self.array_shape, self.num_dims + self.cov_cd_size)
 
         with torch.no_grad():
             # Init mean
@@ -491,27 +479,19 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
             # Init CD of covariance matrix
             phi[..., self.num_dims:] = \
-                torch.cat([1. + phi[..., :self.num_dims] ** 2, torch.zeros(*phi.size()[:-1], 1)], dim=-1)
+                torch.cat([1. + phi[..., :self.num_dims] ** 2,
+                           torch.zeros(*phi.size()[:-1], self.cov_low_triangle_size)], dim=-1)
 
         return phi
 
-    # TODO: What normalization have we all tried etc? see in chat with zhongjie, write about that in thesis
-    # Also tried cov - mu @ mu.t, but that didnt work either...
     def project_params(self, phi):
         phi_project = phi.clone()
 
         # Project diagonal to a given variance interval
-        phi_project[..., self.num_dims:-1] = torch.clamp(phi_project[..., self.num_dims:-1], self.min_var, self.max_var)
+        phi_project[..., self.num_dims:-1] = \
+            torch.clamp(phi_project[..., self.num_dims:-self.cov_low_triangle_size], self.min_var, self.max_var)
 
         return phi_project
-
-    def reparam_function(self):
-        def reparam(params_in):
-            0/0  # TODO
-            mu = params_in[..., 0:self.num_dims].clone()
-            var = self.min_var + torch.sigmoid(params_in[..., self.num_dims:]) * (self.max_var - self.min_var)
-            return torch.cat((mu, var + mu**2), -1)
-        return reparam
 
     def sufficient_statistics(self, x):
         t_x = (x.unsqueeze(dim=-1) @ x.unsqueeze(dim=-2)).flatten(start_dim=-2)
@@ -525,17 +505,12 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
     def expectation_to_natural(self, phi):
         phi = phi.clone()
-        var_ = torch.zeros(*phi.size()[:-1], self.num_dims, self.num_dims).to(phi.device)
-        var_[..., range(self.num_dims), range(self.num_dims)] = phi[..., self.num_dims:-1]
-        var_[..., 1, 0] = phi[..., -1]
-        var = var_ @ var_.transpose(-2, -1)
+        cov = self.get_cov(phi)
+        cov_inverse = cov.inverse()
 
-        import numpy as np
-        assert np.all(np.linalg.eigvalsh(var.cpu().numpy()) > -1e-6)
-        var_inverse = var.inverse()
+        theta1 = (cov_inverse @ phi[..., :self.num_dims].unsqueeze(dim=-1)).squeeze(dim=-1)
+        theta2 = -cov_inverse.reshape((*cov_inverse.size()[:-2], self.num_dims ** 2)) / 2
 
-        theta1 = (var_inverse @ phi[..., :self.num_dims].unsqueeze(dim=-1)).squeeze(dim=-1)
-        theta2 = -var_inverse.reshape((*var_inverse.size()[:-2], self.num_dims ** 2)) / 2
         return torch.cat((theta1, theta2), -1)
 
     def log_normalizer(self, theta):
@@ -543,35 +518,56 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         theta1, theta2 = theta[..., :self.num_dims], theta[..., self.num_dims:]
         theta2 = theta2.reshape((*theta2.size()[:-1], self.num_dims, self.num_dims))
 
-        assert not torch.any(theta1.isnan())
-        assert not torch.any(theta2.isnan())
-
         # Calculating trace "by hand", since torch.trace() doesnt support batches
-        # TODO: Why do we still need to use stable_matrix_inverse here?
-        trace = (stable_matrix_inverse(theta2, epsilon=1e-12) @ theta1.unsqueeze(dim=-1) @ theta1.unsqueeze(dim=-2))\
+        trace = (theta2.inverse() @ theta1.unsqueeze(dim=-1) @ theta1.unsqueeze(dim=-2))\
             .diagonal(dim1=-2, dim2=-1).sum(dim=-1)
         log_normalizer = trace / 4. - theta2.logdet() + self.num_dims * self.log_2pi / 2.
-
-        assert not torch.any(trace.isnan())
-        assert not torch.any(log_normalizer.isnan())
 
         return log_normalizer
 
     def log_h(self, x):
         return -0.5 * self.log_2pi * self.num_dims
 
+    def em_update(self, _triggered=False):
+        """
+        Perform a modified em-update for MVG, updating the cholesky decomposition (CD) of the covariance matrix using
+        the CD from stats_acc.
+        For the remainder, the standard update method is called.
+
+        :param _triggered: for internal use, don't set
+        :return: None
+        """
+
+        if self._online_em_stepsize is not None and not _triggered:
+            return
+
+        mu_update = self._stats_acc[..., :self.num_dims].clone()
+        cov_update = self._stats_acc[..., self.num_dims:].clone().reshape((*self._stats_acc.size()[:-1],
+                                                                           self.num_dims, self.num_dims))
+
+        # Add a small value to the diagonal to ensure positive eigenvalues
+        cov_update[..., range(self.num_dims), range(self.num_dims)] += 1e-3
+
+        # Calculate CD and flatten it
+        l = torch.linalg.cholesky(cov_update)
+        tri_indices = torch.tril_indices(self.num_dims, self.num_dims, offset=-1, device=l.device)
+        l = torch.cat([l.diagonal(dim1=-2, dim2=-1), l[..., tri_indices[0], tri_indices[1]]], dim=-1)
+
+        stats_acc = torch.zeros(
+            *self._stats_acc.size()[:-1], self.num_dims + self.cov_cd_size).to(self._stats_acc.device)
+        stats_acc[..., :self.num_dims] = mu_update
+        stats_acc[..., self.num_dims:] = l
+
+        self._stats_acc = stats_acc
+
+        super().em_update(_triggered)
+
     def _sample(self, num_samples, params, std_correction=1.0):
         with torch.no_grad():
             mu = params[..., :self.num_dims]
-            var_ = torch.zeros(*params.size()[:-1], self.num_dims, self.num_dims).to(params.device)
-            var_[..., range(self.num_dims), range(self.num_dims)] = params[..., self.num_dims:-1]
-            var_[..., 1, 0] = params[..., -1]
-            var = var_ @ var_.transpose(-2, -1)
+            cov = self.get_cov(params)
 
-            import numpy as np
-            assert np.all(np.linalg.eigvalsh(var.cpu().numpy()) > -1e-6)
-
-            distribution = torch.distributions.MultivariateNormal(mu, var)
+            distribution = torch.distributions.MultivariateNormal(mu, cov)
             samples = distribution.rsample((num_samples,))
 
             return shift_last_axis_to(samples, 2)
@@ -580,6 +576,15 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         with torch.no_grad():
             mu = params[..., :self.num_dims]
             return shift_last_axis_to(mu, 1)
+
+    def get_cov(self, phi):
+        l = torch.zeros(*phi.size()[:-1], self.num_dims, self.num_dims).to(phi.device)
+        l[..., range(self.num_dims), range(self.num_dims)] = phi[..., self.num_dims:-self.cov_low_triangle_size]
+
+        tri_indices = torch.tril_indices(self.num_dims, self.num_dims, offset=-1, device=l.device)
+        l[..., tri_indices[0], tri_indices[1]] = phi[..., -self.cov_low_triangle_size:]
+
+        return l @ l.transpose(-2, -1)
 
 
 class BinomialArray(ExponentialFamilyArray):
