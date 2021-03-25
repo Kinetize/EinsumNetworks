@@ -470,7 +470,6 @@ class MultivariateNormalArray(ExponentialFamilyArray):
         return self.cov_cd_size - self.num_dims
 
     def default_initializer(self):
-        # TODO: Correct formula for dims
         phi = torch.empty(self.num_var, *self.array_shape, self.num_dims + self.cov_cd_size)
 
         with torch.no_grad():
@@ -505,7 +504,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
 
     def expectation_to_natural(self, phi):
         phi = phi.clone()
-        cov = self.get_cov(phi)
+        cov = self._get_cov(phi)
         cov_inverse = cov.inverse()
 
         theta1 = (cov_inverse @ phi[..., :self.num_dims].unsqueeze(dim=-1)).squeeze(dim=-1)
@@ -565,7 +564,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
     def _sample(self, num_samples, params, std_correction=1.0):
         with torch.no_grad():
             mu = params[..., :self.num_dims]
-            cov = self.get_cov(params)
+            cov = self._get_cov(params)
 
             distribution = torch.distributions.MultivariateNormal(mu, cov)
             samples = distribution.rsample((num_samples,))
@@ -577,7 +576,7 @@ class MultivariateNormalArray(ExponentialFamilyArray):
             mu = params[..., :self.num_dims]
             return shift_last_axis_to(mu, 1)
 
-    def get_cov(self, phi):
+    def _get_cov(self, phi):
         l = torch.zeros(*phi.size()[:-1], self.num_dims, self.num_dims).to(phi.device)
         l[..., range(self.num_dims), range(self.num_dims)] = phi[..., self.num_dims:-self.cov_low_triangle_size]
 
