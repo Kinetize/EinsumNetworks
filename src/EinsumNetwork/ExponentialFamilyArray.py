@@ -325,6 +325,7 @@ class ExponentialFamilyArray(torch.nn.Module):
         with torch.no_grad():
             p = self.ll.grad
             weighted_stats = (p.unsqueeze(-1) * self.suff_stats).sum(0)
+            assert p.min() >= 0
             p = p.sum(0)
 
             if self._p_acc is None:

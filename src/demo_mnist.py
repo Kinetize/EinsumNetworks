@@ -65,7 +65,7 @@ if exponential_family == EinsumNetwork.CategoricalArray:
 if exponential_family == EinsumNetwork.NormalArray:
     exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
 if exponential_family == EinsumNetwork.MultivariateNormalArray:
-    exponential_family_args = {'min_var': 1e-6, 'max_var': 0.1}
+    exponential_family_args = {'min_var': 1e-6, 'max_var': 0.01}
 
 # get data
 if fashion_mnist:

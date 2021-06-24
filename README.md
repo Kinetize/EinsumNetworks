@@ -1,5 +1,7 @@
 # Einsum Networks -- Fast and Scalable Learning of Tractable Probabilistic Circuits
 
+Disclaimer: This is a modified version of the original [EiNet repository](https://github.com/cambridge-mlg/EinsumNetworks).
+
 PyTorch implementation of Einsum Netwrks, proposed in 
 
 R. Peharz, S. Lang, A. Vergari, K. Stelzner, A. Molina, M. Trapp, G. Van den Broeck, K. Kersting, Z. Ghahramani,
